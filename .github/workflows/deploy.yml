@@ -1,0 +1,88 @@
+name: deployment
+on:
+  push:
+    branches:
+      - 'development'
+      - 'demo'
+      - 'staging'
+      - 'production'
+permissions:
+  id-token: write
+  contents: read
+  packages: read
+
+jobs:
+  gcs-deployment:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 'Checkout'
+        uses: actions/checkout@v4
+      - name: 'Set branch specific env vars'
+        run: |
+          if [ ${{ github.ref_name }} == development ]
+          then
+            ENV_SHORT_NAME=dev
+            PROJECT_ID_PREFIX=dev
+            REACT_APP_API_URL=https://dev.api.digitrad.trade
+            REACT_APP_AUTH_URL=https://dev.account.digitrad.trade
+          elif [ ${{ github.ref_name }} == demo ]
+          then
+            ENV_SHORT_NAME=demo
+            PROJECT_ID_PREFIX=demo
+            REACT_APP_API_URL=https://demo.api.digitrad.trade
+            REACT_APP_AUTH_URL=https://demo.account.digitrad.trade
+          elif [ ${{ github.ref_name }} == staging ]
+          then
+            ENV_SHORT_NAME=stg
+            PROJECT_ID_PREFIX=stg
+            PROJECT_ID_SUFFIX=-367206
+            REACT_APP_API_URL=https://stg.api.digitrad.trade
+            REACT_APP_AUTH_URL=https://stg.account.digitrad.trade
+          elif [ ${{ github.ref_name }} == production ]
+          then
+            ENV_SHORT_NAME=prod
+            PROJECT_ID_PREFIX=production
+            REACT_APP_API_URL=https://api.digitrad.trade
+            REACT_APP_AUTH_URL=https://account.digitrad.trade
+          fi
+
+          PROJECT_ID=digitrad-ver2-$PROJECT_ID_PREFIX$PROJECT_ID_SUFFIX
+          NAME_PREFIX=$ENV_SHORT_NAME-int-web
+          ENV_SHORT_NAME_UPPER=$(echo $ENV_SHORT_NAME | tr '[:lower:]' '[:upper:]')
+
+          echo "BUCKET_NAME=$NAME_PREFIX-frontend" >> $GITHUB_ENV
+          echo "WORKLOAD_IDP_SECRET_NAME=${ENV_SHORT_NAME_UPPER}_WORKLOAD_IDENTITY_PROVIDER" >> $GITHUB_ENV
+          echo "DEPLOYMENT_SERVICE_ACCOUNT=$NAME_PREFIX-web-deploy@$PROJECT_ID.iam.gserviceaccount.com" >> $GITHUB_ENV
+          echo "REACT_APP_API_URL=$REACT_APP_API_URL" >> $GITHUB_ENV
+          echo "REACT_APP_AUTH_URL=$REACT_APP_AUTH_URL" >> $GITHUB_ENV
+          echo "REACT_APP_ENV_SHORT_NAME=$ENV_SHORT_NAME" >> $GITHUB_ENV
+
+      - name: 'Authenticate to GCP'
+        uses: 'google-github-actions/auth@v2'
+        with:
+          create_credentials_file: 'true'
+          workload_identity_provider: '${{ secrets[env.WORKLOAD_IDP_SECRET_NAME] }}'
+          service_account: '${{ env.DEPLOYMENT_SERVICE_ACCOUNT }}'
+
+      - name: 'Set up Cloud SDK'
+        uses: 'google-github-actions/setup-gcloud@v2'
+
+      - name: Use Node 18
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: 'yarn'
+          registry-url: 'https://npm.pkg.github.com'
+          scope: '@standage-jp'
+
+      - name: 'Build and sync to GCS'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          yarn install --frozen-lockfile
+          export REACT_APP_API_URL=${{ env.REACT_APP_API_URL }}
+          export REACT_APP_ENV_SHORT_NAME=${{ env.REACT_APP_ENV_SHORT_NAME }}
+          export REACT_APP_AUTH_URL=${{ env.REACT_APP_AUTH_URL }}
+          yarn build
+          gsutil -m -h "Cache-Control:public, max-age=3600" rsync -x "index.html" -r -d dist gs://${{ env.BUCKET_NAME }}
+          gsutil -m -h "Cache-Control:public, max-age=0" cp dist/index.html gs://${{ env.BUCKET_NAME }}

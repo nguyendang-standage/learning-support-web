@@ -1,0 +1,49 @@
+name: Prepare PR
+
+on:
+  pull_request:
+    branches:
+      - development
+
+env:
+  REACT_APP_API_URL: https://dev.api.digitrad.trade
+  REACT_APP_SHOW_API_DEBUG: false
+  REACT_APP_ENV_SHORT_NAME: dev
+
+jobs:
+  test_and_preview:
+    name: Test and Preview
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Use Node 18
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: 'yarn'
+          registry-url: 'https://npm.pkg.github.com'
+          scope: '@standage-jp'
+
+      - name: Check & install packages
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          FORBIDDEN_LOCKFILE=package-lock.json
+          if [ -f $FORBIDDEN_LOCKFILE ]
+          then
+            echo "$FORBIDDEN_LOCKFILE found (please remove it, we are using yarn!)"
+            exit 1
+          fi
+
+          yarn install --frozen-lockfile
+
+      - name: Run tests
+        run: |
+          yarn format
+          yarn lint
+
+          # TODO: enable component tests when they can be run reliably
+          # yarn test
+
